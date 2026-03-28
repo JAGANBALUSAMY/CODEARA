@@ -2,6 +2,7 @@ import subprocess
 import sys
 import json
 import re
+import ast
 from typing import List, Tuple, Dict
 
 
@@ -20,10 +21,12 @@ class CodeExecutor:
             state_data = []
             
             try:
-                wrapped_code = self._wrap_code(code, test_input)
+                wrapped_code = self._wrap_code(code)
                 
+                # Pass test_input directly into the subprocess stdin parameter
                 result = subprocess.run(
                     [sys.executable, "-c", wrapped_code],
+                    input=test_input,
                     capture_output=True,
                     text=True,
                     timeout=self.timeout
@@ -39,8 +42,8 @@ class CodeExecutor:
                     except json.JSONDecodeError:
                         pass
                 
-                if result.returncode != 0:
-                    error_msg = result.stderr if result.stderr else result.stdout
+                if result.stderr.strip() or result.returncode != 0:
+                    error_msg = result.stderr.strip() if result.stderr.strip() else result.stdout.strip()
                     actual_output = f"Error: {error_msg}"
                     error_type = "runtime_error"
                 else:
@@ -62,22 +65,30 @@ class CodeExecutor:
         
         return results
 
-    def _wrap_code(self, user_code: str, test_input: str) -> str:
+    def _wrap_code(self, user_code: str) -> str:
         lines = user_code.split('\n')
         func_name = None
         for line in lines:
             if line.strip().startswith('def '):
                 func_name = line.strip().split('(')[0].replace('def ', '')
                 break
-        
+                
         wrapped = f'''
+import sys
 import json
+import ast
 
-_input = {test_input}
 __STATE__ = []
 
 def visualize(**kwargs):
     __STATE__.append(kwargs)
+
+# Read raw multiline input from stdin properly
+raw_input = sys.stdin.read().strip()
+try:
+    _input = ast.literal_eval(raw_input)
+except Exception:
+    _input = raw_input
 
 # User code starts here
 {user_code}
@@ -132,7 +143,7 @@ def execute_user_code(code: str, test_cases: List[dict]) -> dict:
         }
         
     overall_passed = True
-    overall_error_type = None
+    overall_error_type = "success"
 
     for test_case in test_cases:
         test_input = test_case["input"]

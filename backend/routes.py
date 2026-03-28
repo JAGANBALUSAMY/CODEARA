@@ -209,9 +209,9 @@ async def get_daily_task():
                 
                 # Priority 6: Calculate accuracy dynamically for the level
                 if level_attempts == 0:
-                    accuracy_ratio = 0.0
+                    accuracy = 0.0
                 else:
-                    accuracy_ratio = level_success / level_attempts
+                    accuracy = level_success / level_attempts
                 
                 # Priority 6: Calculate inactivity days
                 last_attempt = await attempts_collection.find_one(
@@ -230,8 +230,8 @@ async def get_daily_task():
                     # Treat unseen levels as having high inactivity to encourage exploration mathematically
                     inactivity_days = 30
                 
-                # Compute Strict Weakness Formula
-                score = 0.7 * (1.0 - accuracy_ratio) + 0.3 * inactivity_days
+                # Compute Strict Weakness Formula: score = 0.7 * (1 - accuracy) + 0.3 * inactivity_days
+                score = 0.7 * (1.0 - accuracy) + 0.3 * inactivity_days
                 
                 if score > max_score:
                     max_score = score
