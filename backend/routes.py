@@ -73,21 +73,21 @@ async def execute_code(request: ExecuteRequest):
         for tc in level.get("test_cases", [])
     ]
     
-    results = execute_user_code(request.code, test_cases)
-    
-    all_passed = all(r["passed"] for r in results)
+    response_data = execute_user_code(request.code, test_cases)
     
     return ExecuteResponse(
-        passed=all_passed,
+        passed=response_data["passed"],
+        error_type=response_data["error_type"],
         results=[
             TestResult(
                 input=r["input"],
                 expected=r["expected"],
                 actual=r["actual"],
                 passed=r["passed"],
+                error_type=r["error_type"],
                 states=r.get("states", [])
             )
-            for r in results
+            for r in response_data["results"]
         ]
     )
 
@@ -111,7 +111,7 @@ async def submit_code(request: SubmitRequest):
         progress_doc = {
             "user_id": USER_ID,
             "topic": "arrays",
-            "attempts": 1,
+            "total_attempts": 1,
             "successful_attempts": 1 if request.passed else 0,
             "accuracy": 100.0 if request.passed else 0.0,
             "last_practiced": datetime.utcnow().isoformat(),
@@ -119,8 +119,8 @@ async def submit_code(request: SubmitRequest):
         }
         await progress_collection.insert_one(progress_doc)
     else:
-        new_attempts = progress["attempts"] + 1
-        new_successful = progress["successful_attempts"] + (1 if request.passed else 0)
+        new_attempts = progress.get("total_attempts", progress.get("attempts", 0)) + 1
+        new_successful = progress.get("successful_attempts", 0) + (1 if request.passed else 0)
         new_accuracy = (new_successful / new_attempts) * 100
         
         levels_completed = progress.get("levels_completed", [])
@@ -131,7 +131,7 @@ async def submit_code(request: SubmitRequest):
             {"user_id": USER_ID},
             {
                 "$set": {
-                    "attempts": new_attempts,
+                    "total_attempts": new_attempts,
                     "successful_attempts": new_successful,
                     "accuracy": new_accuracy,
                     "last_practiced": datetime.utcnow().isoformat(),
@@ -151,7 +151,7 @@ async def get_progress():
         return {
             "user_id": USER_ID,
             "topic": "arrays",
-            "attempts": 0,
+            "total_attempts": 0,
             "successful_attempts": 0,
             "accuracy": 0.0,
             "last_practiced": None,
@@ -161,7 +161,7 @@ async def get_progress():
     return {
         "user_id": progress["user_id"],
         "topic": progress["topic"],
-        "attempts": progress["attempts"],
+        "total_attempts": progress.get("total_attempts", progress.get("attempts", 0)),
         "successful_attempts": progress["successful_attempts"],
         "accuracy": progress["accuracy"],
         "last_practiced": progress.get("last_practiced"),
@@ -183,7 +183,7 @@ async def get_daily_task():
     else:
         progress = await progress_collection.find_one({"user_id": USER_ID})
         
-        if not progress or progress.get("attempts", 0) == 0:
+        if not progress or progress.get("total_attempts", progress.get("attempts", 0)) == 0:
             level = await levels_collection.find_one({"difficulty": "easy"})
         else:
             levels = []
@@ -191,32 +191,51 @@ async def get_daily_task():
                 levels.append(lvl)
             
             level_id = None
-            min_accuracy = 100.0
-            min_attempts = float('inf')
+            max_score = -1.0
+            now = datetime.utcnow()
             
             for lvl in levels:
-                lvl_id = str(lvl["_id"])
+                lvl_id_str = str(lvl["_id"])
                 level_attempts = await attempts_collection.count_documents({
                     "user_id": USER_ID,
-                    "level_id": lvl_id
+                    "level_id": lvl_id_str
                 })
                 
                 level_success = await attempts_collection.count_documents({
                     "user_id": USER_ID,
-                    "level_id": lvl_id,
+                    "level_id": lvl_id_str,
                     "result": "passed"
                 })
                 
+                # Priority 6: Calculate accuracy dynamically for the level
                 if level_attempts == 0:
-                    level_id = lvl_id
-                    break
+                    accuracy_ratio = 0.0
+                else:
+                    accuracy_ratio = level_success / level_attempts
                 
-                level_accuracy = (level_success / level_attempts) * 100
+                # Priority 6: Calculate inactivity days
+                last_attempt = await attempts_collection.find_one(
+                    {"user_id": USER_ID, "level_id": lvl_id_str},
+                    sort=[("timestamp", -1)]
+                )
                 
-                if level_accuracy < min_accuracy or (level_accuracy == min_accuracy and level_attempts < min_attempts):
-                    min_accuracy = level_accuracy
-                    min_attempts = level_attempts
-                    level_id = lvl_id
+                inactivity_days = 0
+                if last_attempt and "timestamp" in last_attempt:
+                    try:
+                        last_time = datetime.fromisoformat(last_attempt["timestamp"].replace("Z", "+00:00"))
+                        inactivity_days = (now - last_time).days
+                    except:
+                        pass
+                elif level_attempts == 0:
+                    # Treat unseen levels as having high inactivity to encourage exploration mathematically
+                    inactivity_days = 30
+                
+                # Compute Strict Weakness Formula
+                score = 0.7 * (1.0 - accuracy_ratio) + 0.3 * inactivity_days
+                
+                if score > max_score:
+                    max_score = score
+                    level_id = lvl_id_str
             
             if not level_id and levels:
                 level_id = str(levels[0]["_id"])

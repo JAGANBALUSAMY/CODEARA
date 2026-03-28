@@ -33,6 +33,7 @@ class TestResult(BaseModel):
 
 class ExecuteResponse(BaseModel):
     passed: bool
+    error_type: Optional[str] = None
     results: List[TestResult]
 
 
@@ -46,7 +47,7 @@ class SubmitRequest(BaseModel):
 class Progress(BaseModel):
     user_id: str
     topic: str
-    attempts: int
+    total_attempts: int
     successful_attempts: int
     accuracy: float
     last_practiced: Optional[str] = None
