@@ -28,13 +28,13 @@ class TestResult(BaseModel):
     expected: str
     actual: str
     passed: bool
-    error_type: str
+    error_type: Optional[str] = None
     states: Optional[List[dict]] = []
 
 
 class ExecuteResponse(BaseModel):
     passed: bool
-    error_type: str
+    error_type: Optional[str] = None
     results: List[TestResult]
 
 
